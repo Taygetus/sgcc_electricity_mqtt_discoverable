@@ -5,6 +5,11 @@ ENV PYTHONUNBUFFERED=1
 
 ARG TARGETARCH
 
+# 换源
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && pip config --global set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip config --global set install.trusted-host pypi.tuna.tsinghua.edu.cn 
+
 RUN apt-get --allow-releaseinfo-change update \
     && apt-get install -y --no-install-recommends jq chromium chromium-driver tzdata \
     && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \

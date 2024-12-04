@@ -1,11 +1,25 @@
-# ⚡️国家电网电力获取
+# ⚡️国家电网电力获取 [Github](https://github.com/Taygetus/sgcc_electricity_mqtt_discoverable)
+[![Docker Image CI](https://github.com/Taygetus/sgcc_electricity_mqtt_discoverable/actions/workflows/docker-image.yml/badge.svg)](https://github.com/Taygetus/sgcc_electricity_mqtt_discoverable/actions/workflows/docker-image.yml)
+[![Image Size](https://img.shields.io/docker/image-size/taygetus/sgcc_electricity_mqtt_discoverable)](https://hub.docker.com/r/taygetus/sgcc_electricity_mqtt_discoverable)
+[![Docker Pull](https://img.shields.io/docker/pulls/taygetus/sgcc_electricity_mqtt_discoverable?color=%2348BB78&logo=docker&label=pulls)](https://hub.docker.com/r/taygetus/sgcc_electricity_mqtt_discoverable)
 
 > Fork自 [ARC-MX/sgcc_electricity_new](https://github.com/ARC-MX/sgcc_electricity_new)
+
+# 修改记录
+
+- 2024-12-20 同步上游最新代码，配置文件中增加`IGNORE_USER_ID`，修复多用户数据获取问题，docker镜像增加打包日期版本
+- 2024-11-27 mqtt 自动发现，电费设备
 
 # 变化点：
 1. 舍弃docker-componse，使用docker run(本人习惯)。
 2. 取消http-api向HomeAssistant发送数据，使用mqtt自动发现，实现电费设备。
 3. 删除电费余额通知模块。
+
+# 注意事项
+
+ha中生成是设备的相关实体都不能改名，改名就接不到信息了。（不知道为啥，凑合用，欢迎PR）
+
+![](assets/dont_change_name.jpg)
 
 ## 传感器实体
 | 实体标识符                   | 说明       | 单位 |
@@ -38,7 +52,9 @@ vim .env
 # 修改为自己的登录账号
 PHONE_NUMBER="xxx" 
 # 修改为自己的登录密码
-PASSWORD="xxxx" 
+PASSWORD="xxxx"
+# 排除指定用户ID，如果出现一些不想检测的ID或者有些充电、发电帐号、可以使用这个环境变量，如果有多个就用","分隔，","之间不要有空格
+IGNORE_USER_ID=xxxxxxx,xxxxxxx,xxxxxxx
 
 # SQLite 数据库配置
 # or False 不启用数据库储存每日用电量数据。
@@ -85,5 +101,7 @@ docker run -d --restart=unless-stopped \
 -e TZ=Asia/Shanghai \
 taygetus/sgcc_electricity_mqtt_discoverable
 ```
-> -v xxxx/.env   配置文件</br>
-> -v xxxx/homeassistant.db    数据库
+> -v xxxx/.env   配置文件</br>-v xxxx/homeassistant.db    数据库
+
+# thanks for the coffee
+![赞赏](assets/alipay_wxpay.png)
