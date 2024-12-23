@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 ARG TARGETARCH
+ARG VERSION
+ENV VERSION=${VERSION}
 
 RUN apt-get --allow-releaseinfo-change update \
     && apt-get install -y --no-install-recommends jq chromium chromium-driver tzdata \

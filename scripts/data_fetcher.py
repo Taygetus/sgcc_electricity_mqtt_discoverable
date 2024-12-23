@@ -3,8 +3,6 @@ import os
 import re
 import subprocess
 import time
-import traceback
-import copy
 
 import random
 import base64
@@ -20,6 +18,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from sensor_updator import SensorUpdator
 
 from const import *
 
@@ -30,52 +29,6 @@ from PIL import Image
 from onnx import ONNX
 import platform
 
-
-def __ease_out_expo(sep):
-    if sep == 1:
-        return 1
-    else:
-        return 1 - pow(2, -10 * sep)
-
-def _get_tracks(distance):
-    """
-    拿到移动轨迹，模仿人的滑动行为，先匀加速后匀减速
-    匀变速运动基本公式：
-    ①v = v0+at
-    ②s = v0t+1/2at^2
-    """
-    if distance == 0:
-        return [0]
-    #初速度
-    v = 0
-    #单位时间为0.3s来统计轨迹，轨迹即0.3内的位移
-    t = 0.31
-    #位置/轨迹列表，列表内的一个元素代表0.3s的位移
-    tracks = []
-    #当前位移
-    current = 0
-    #到达mid值开始减速
-    mid = distance*4/5
-
-    while current < distance:
-        if current < mid:       #加速度越小，单位时间内的位移越小，模拟的轨迹就越多越详细
-            a = 20
-        else:
-            a = -30
-        #初速度
-        v0 = v
-        #0.3秒内的位移
-        s = v0*t+0.5*a*(t**2)
-        #当前的位置
-        current += s
-        #添加到轨迹列表
-        tracks.append(round(s))
-        #速度已经到达v,该速度作为下次的初速度
-        v = v0+a*t
-    print("sum(tracks) is {}, sum(tracks) - distance is {}",sum(tracks),sum(tracks)-round(distance*1.02))
-    tracks.append(sum(tracks)-distance)
-    logging.info(f"image tracks distance is {sum(tracks)}")
-    return tracks 
 
 def base64_to_PLI(base64_str: str):
     base64_data = re.sub('^data:image/.+;base64,', '', base64_str)
@@ -305,11 +258,6 @@ class DataFetcher:
                 distance = self.onnx.get_distance(background_image)
                 logging.info(f"Image CaptCHA distance is {distance}.\r")
 
-                # slider = driver.find_element(By.CLASS_NAME, "slide-verify-slider-mask-item")
-                # ActionChains(driver).click_and_hold(slider).perform()
-                # ActionChains(driver).move_by_offset(xoffset=round(distance*1.06), yoffset=0).perform()
-                # ActionChains(driver).release().perform()
-
                 self._sliding_track(driver, round(distance*1.06)) #1.06是补偿
                 time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
                 if (driver.current_url == LOGIN_URL): # if login not success
@@ -330,25 +278,6 @@ class DataFetcher:
             "Login failed, maybe caused by 1.incorrect phone_number and password, please double check. or 2. network, please mnodify LOGIN_EXPECTED_TIME in .env and run docker compose up --build.")
         
     def fetch(self):
-        """the entry, only retry logic here """
-        try:
-            return self._fetch()
-        except Exception as e:
-            traceback.print_exc()
-            logging.error(
-                f"Webdriver quit abnormly, reason: {e}. {self.RETRY_TIMES_LIMIT} retry times left.")
-
-    def _fetch(self):
-
-        balance_list = []
-        last_daily_date_list = []
-        last_daily_usage_list = []
-        yearly_charge_list = []
-        yearly_usage_list = []        
-        month_list = []
-        month_charge_list = []
-        month_usage_list = []
-
 
         """main logic here"""
         if platform.system() == 'Windows':
@@ -360,7 +289,8 @@ class DataFetcher:
         driver.maximize_window() 
         time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
         logging.info("Webdriver initialized.")
-
+        updator = SensorUpdator()
+        
         try:
             if os.getenv("DEBUG_MODE", "false").lower() == "true":
                 if self._login(driver,phone_code=True):
@@ -377,58 +307,49 @@ class DataFetcher:
             user_id_list = self._get_user_ids(driver)
             logging.info(f"Here are a total of {len(user_id_list)} userids, which are {user_id_list} among which {self.IGNORE_USER_ID} will be ignored.")
             time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-
-            current_userid_list = copy.deepcopy(user_id_list)
-
-            for i, user_id in enumerate(user_id_list):           
-                try: 
-                    # switch to electricity charge balance page
-                    driver.get(BALANCE_URL) 
-                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                    self._click_button(driver, By.CLASS_NAME, "el-input__suffix")
-                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                    self._click_button(driver, By.XPATH, f"/html/body/div[2]/div[1]/div[1]/ul/li[{i+1}]/span")
-                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                    current_userid = self._get_current_userid(driver)
-                    if current_userid in self.IGNORE_USER_ID:
-                        current_userid_list.remove(current_userid)
-                        logging.info(f"The user ID {current_userid} will be ignored in user_id_list")
-                        continue
-                    else:
-                        ### get data 
-                        balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_data, month_usage, month_charge  = self._get_all_data(driver, user_id)
-                        
-                        balance_list.append(balance)
-                        last_daily_date_list.append(last_daily_date)
-                        last_daily_usage_list.append(last_daily_usage)
-                        yearly_charge_list.append(yearly_charge)
-                        yearly_usage_list.append(yearly_usage)
-                        month_list.append(month_data)
-                        month_usage_list.append(month_usage)
-                        month_charge_list.append(month_charge)
-                        
-                        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                except Exception as e:
-                    if (i != len(user_id_list)):
-                        logging.info(f"The current user {user_id} data fetching failed {e}, the next user data will be fetched.")
-                    else:
-                        logging.info(f"The user {user_id} data fetching failed, {e}")
-                    continue    
-
+        except Exception as e:
+            logging.error(
+                f"Webdriver quit abnormly, reason: {e}. {self.RETRY_TIMES_LIMIT} retry times left.")
             driver.quit()
 
-            logging.info("Webdriver quit after fetching data successfully.")
-            return current_userid_list, balance_list, last_daily_date_list, last_daily_usage_list, yearly_charge_list, yearly_usage_list, month_list, month_usage_list, month_charge_list 
+        for userid_index, user_id in enumerate(user_id_list):           
+            try: 
+                # switch to electricity charge balance page
+                driver.get(BALANCE_URL) 
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                self._choose_current_userid(driver,userid_index)
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                current_userid = self._get_current_userid(driver)
+                if current_userid in self.IGNORE_USER_ID:
+                    logging.info(f"The user ID {current_userid} will be ignored in user_id_list")
+                    continue
+                else:
+                    ### get data 
+                    balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage  = self._get_all_data(driver, user_id, userid_index)
+                    updator.update_one_userid(user_id, balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage)
+        
+                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+            except Exception as e:
+                if (userid_index != len(user_id_list)):
+                    logging.info(f"The current user {user_id} data fetching failed {e}, the next user data will be fetched.")
+                else:
+                    logging.info(f"The user {user_id} data fetching failed, {e}")
+                    logging.info("Webdriver quit after fetching data successfully.")
+                continue    
 
-        finally:
-            driver.quit()
+        driver.quit()
+
 
     def _get_current_userid(self, driver):
         current_userid = driver.find_element(By.XPATH, '//*[@id="app"]/div/div/article/div/div/div[2]/div/div/div[1]/div[2]/div/div/div/div[2]/div/div[1]/div/ul/div/li[1]/span[2]').text
         return current_userid
+    
+    def _choose_current_userid(self, driver, userid_index):
+        self._click_button(driver, By.CLASS_NAME, "el-input__suffix")
+        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+        self._click_button(driver, By.XPATH, f"/html/body/div[2]/div[1]/div[1]/ul/li[{userid_index+1}]/span")
 
-
-    def _get_all_data(self, driver, user_id):
+    def _get_all_data(self, driver, user_id, userid_index):
         balance = self._get_electric_balance(driver)
         if (balance is None):
             logging.info(f"Get electricity charge balance for {user_id} failed, Pass.")
@@ -438,6 +359,8 @@ class DataFetcher:
         time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
         # swithc to electricity usage page
         driver.get(ELECTRIC_USAGE_URL)
+        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+        self._choose_current_userid(driver, userid_index)
         time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
         # get data for each user id
         yearly_usage, yearly_charge = self._get_yearly_data(driver)
@@ -462,7 +385,7 @@ class DataFetcher:
                 logging.info(
                     f"Get month power charge for {user_id} successfully, {month[m]} usage is {month_usage[m]} KWh, charge is {month_charge[m]} CNY.")
         # get yesterday usage
-        last_daily_datetime, last_daily_usage = self._get_yesterday_usage(driver)
+        last_daily_date, last_daily_usage = self._get_yesterday_usage(driver)
 
         # 新增储存用电量
         if self.enable_database_storage:
@@ -472,11 +395,7 @@ class DataFetcher:
             logging.error(f"Get daily power consumption for {user_id} failed, pass")
         else:
             logging.info(
-                f"Get daily power consumption for {user_id} successfully, , {last_daily_datetime} usage is {last_daily_usage} kwh.")
-        if month:
-            month_data = month[-1]
-        else:
-            month_data = None
+                f"Get daily power consumption for {user_id} successfully, , {last_daily_date} usage is {last_daily_usage} kwh.")
         if month_charge:
             month_charge = month_charge[-1]
         else:
@@ -486,10 +405,9 @@ class DataFetcher:
         else:
             month_usage = None
 
-        return balance, last_daily_datetime, last_daily_usage, yearly_charge, yearly_usage, month_data, month_usage, month_charge
+        return balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage
 
     def _get_user_ids(self, driver):
-
         # click roll down button for user id
         self._click_button(driver, By.XPATH, "//div[@class='el-dropdown']/span")
         time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
