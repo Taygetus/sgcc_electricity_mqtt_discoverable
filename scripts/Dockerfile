@@ -31,4 +31,4 @@ RUN cd /tmp \
 
 ENV LANG=C.UTF-8
 
-ENTRYPOINT ["python3", "/app/main.py"]
+CMD ["python3", "/app/main.py"]

@@ -1,3 +1,4 @@
+from ast import Try
 import logging
 import os
 import re
@@ -96,13 +97,6 @@ class DataFetcher:
 
         # 获取 ENABLE_DATABASE_STORAGE 的值，默认为 False
         self.enable_database_storage = os.getenv("ENABLE_DATABASE_STORAGE", "false").lower() == "true"
-
-        if self.enable_database_storage:
-            # 将数据存储到数据库
-            logging.info("enable_database_storage is true, we will store the data to the database.")
-        else:
-            logging.info("enable_database_storage is false, we will not store the data to the database.")
-
         self.DRIVER_IMPLICITY_WAIT_TIME = int(os.getenv("DRIVER_IMPLICITY_WAIT_TIME", 60))
         self.RETRY_TIMES_LIMIT = int(os.getenv("RETRY_TIMES_LIMIT", 5))
         self.LOGIN_EXPECTED_TIME = int(os.getenv("LOGIN_EXPECTED_TIME", 10))
@@ -164,32 +158,58 @@ class DataFetcher:
         try:
             # 创建数据库
             DB_NAME = os.getenv("DB_NAME", "homeassistant.db")
+            if 'PYTHON_IN_DOCKER' in os.environ: 
+                DB_NAME = "/data/" + DB_NAME
             self.connect = sqlite3.connect(DB_NAME)
             self.connect.cursor()
             logging.info(f"Database of {DB_NAME} created successfully.")
-            try:
-                # 创建表名
-                self.db_name = f"daily{user_id}"
-                sql = f"CREATE TABLE {self.db_name} (date DATE PRIMARY KEY NOT NULL, usage REAL NOT NULL);"
-                self.connect.execute(sql)
-                logging.info(f"Table {self.db_name} created successfully")
-            except BaseException as e:
-                logging.debug(f"Table {self.db_name} already exists: {e}")
+            # 创建表名
+            self.table_name = f"daily{user_id}"
+            sql = f'''CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    date DATE PRIMARY KEY NOT NULL, 
+                    usage REAL NOT NULL)'''
+            self.connect.execute(sql)
+            logging.info(f"Table {self.table_name} created successfully")
+			
+			# 创建data表名
+            self.table_expand_name = f"data{user_id}"
+            sql = f'''CREATE TABLE IF NOT EXISTS {self.table_expand_name} (
+                    name TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL)'''
+            self.connect.execute(sql)
+            logging.info(f"Table {self.table_expand_name} created successfully")
+			
         # 如果表已存在，则不会创建
-        except BaseException as e:
-            logging.debug(f"Table: {self.db_name} already exists:{e}")
-        finally:
-            return self.connect
+        except sqlite3.Error as e:
+            logging.debug(f"Create db or Table error:{e}")
+            return False
+        return True
 
     def insert_data(self, data:dict):
-            # 创建索引
-            try:
-                sql = f"INSERT OR REPLACE INTO {self.db_name} VALUES(strftime('%Y-%m-%d','{data['date']}'),{data['usage']});"
-                self.connect.execute(sql)
-                self.connect.commit()
-            except BaseException as e:
-                logging.debug(f"Data update failed: {e}")
+        if self.connect is None:
+            logging.error("Database connection is not established.")
+            return
+        # 创建索引
+        try:
+            sql = f"INSERT OR REPLACE INTO {self.table_name} VALUES(strftime('%Y-%m-%d','{data['date']}'),{data['usage']});"
+            self.connect.execute(sql)
+            self.connect.commit()
+        except BaseException as e:
+            logging.debug(f"Data update failed: {e}")
 
+    def insert_expand_data(self, data:dict):
+        if self.connect is None:
+            logging.error("Database connection is not established.")
+            return
+        # 创建索引
+        try:
+            sql = f"INSERT OR REPLACE INTO {self.table_expand_name} VALUES('{data['name']}','{data['value']}');"
+            self.connect.execute(sql)
+            self.connect.commit()
+        except BaseException as e:
+            logging.debug(f"Data update failed: {e}")
+
+                
     def _get_webdriver(self):
         chrome_options = Options()
         chrome_options.add_argument('--incognito')
@@ -220,7 +240,7 @@ class DataFetcher:
             self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[1]/div[1]/div[3]/span')
             input_elements = driver.find_elements(By.CLASS_NAME, "el-input__inner")
             input_elements[2].send_keys(self._username)
-            logging.info(f"input_elements username : {self._username}.\r")
+            logging.info(f"input_elements username : {self._username}\r")
             self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[2]/div[2]/form/div[1]/div[2]/div[2]/div/a')
             code = input("Input your phone verification code: ")
             input_elements[3].send_keys(code)
@@ -235,9 +255,9 @@ class DataFetcher:
             # input username and password
             input_elements = driver.find_elements(By.CLASS_NAME, "el-input__inner")
             input_elements[0].send_keys(self._username)
-            logging.info(f"input_elements username : {self._username}.\r")
+            logging.info(f"input_elements username : {self._username}\r")
             input_elements[1].send_keys(self._password)
-            logging.info(f"input_elements password : {self._password}.\r")
+            logging.info(f"input_elements password : {self._password}\r")
 
             # click login button
             self._click_button(driver, By.CLASS_NAME, "el-button.el-button--primary")
@@ -302,15 +322,18 @@ class DataFetcher:
                     logging.info("login successed !")
                 else:
                     logging.info("login unsuccessed !")
-            logging.info(f"Login successfully on {LOGIN_URL}")
-            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT*2)
-            user_id_list = self._get_user_ids(driver)
-            logging.info(f"Here are a total of {len(user_id_list)} userids, which are {user_id_list} among which {self.IGNORE_USER_ID} will be ignored.")
-            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
         except Exception as e:
             logging.error(
                 f"Webdriver quit abnormly, reason: {e}. {self.RETRY_TIMES_LIMIT} retry times left.")
             driver.quit()
+
+        logging.info(f"Login successfully on {LOGIN_URL}")
+        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT*2)
+        logging.info(f"Try to get the userid list")
+        user_id_list = self._get_user_ids(driver)
+        logging.info(f"Here are a total of {len(user_id_list)} userids, which are {user_id_list} among which {self.IGNORE_USER_ID} will be ignored.")
+        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+
 
         for userid_index, user_id in enumerate(user_id_list):           
             try: 
@@ -375,27 +398,31 @@ class DataFetcher:
         else:
             logging.info(
                 f"Get year power charge for {user_id} successfully, yealrly charge is {yearly_charge} CNY")
-
-        # get month usage
-        month, month_usage, month_charge = self._get_month_usage(driver)
-        if month is None:
-            logging.error(f"Get month power usage for {user_id} failed, pass")
-        else:
-            for m in range(len(month)):
-                logging.info(
-                    f"Get month power charge for {user_id} successfully, {month[m]} usage is {month_usage[m]} KWh, charge is {month_charge[m]} CNY.")
+  
         # get yesterday usage
         last_daily_date, last_daily_usage = self._get_yesterday_usage(driver)
 
         # 新增储存用电量
         if self.enable_database_storage:
-            self.save_daily_usage_data(driver, user_id)
+            # 将数据存储到数据库
+            logging.info("enable_database_storage is true, we will store the data to the database.")
+            # 按天获取数据 7天/30天
+            date, usages = self._get_daily_usage_data(driver)
+            # 按月获取数据
+            month, month_usage, month_charge = self._get_month_usage(driver)
+            if month is None:
+                logging.error(f"Get month power usage for {user_id} failed, pass")
+        else:
+            logging.info("enable_database_storage is false, we will not store the data to the database.")
 
         if last_daily_usage is None:
             logging.error(f"Get daily power consumption for {user_id} failed, pass")
         else:
             logging.info(
                 f"Get daily power consumption for {user_id} successfully, , {last_daily_date} usage is {last_daily_usage} kwh.")
+                
+        self._save_user_data(user_id, balance, last_daily_date, last_daily_usage, date, usages, month, month_usage, month_charge, yearly_charge, yearly_usage)
+        
         if month_charge:
             month_charge = month_charge[-1]
         else:
@@ -408,21 +435,32 @@ class DataFetcher:
         return balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage
 
     def _get_user_ids(self, driver):
-        # click roll down button for user id
-        self._click_button(driver, By.XPATH, "//div[@class='el-dropdown']/span")
-        time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-        # wait for roll down menu displayed
-        target = driver.find_element(By.CLASS_NAME, "el-dropdown-menu.el-popper").find_element(By.TAG_NAME, "li")
-        WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
-        WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
-            EC.text_to_be_present_in_element((By.XPATH, "//ul[@class='el-dropdown-menu el-popper']/li"), ":"))
+        try:
+            # click roll down button for user id
+            self._click_button(driver, By.XPATH, "//div[@class='el-dropdown']/span")
+            logging.debug(f'''self._click_button(driver, By.XPATH, "//div[@class='el-dropdown']/span")''')
+            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+            # wait for roll down menu displayed
+            target = driver.find_element(By.CLASS_NAME, "el-dropdown-menu.el-popper").find_element(By.TAG_NAME, "li")
+            logging.debug(f'''target = driver.find_element(By.CLASS_NAME, "el-dropdown-menu.el-popper").find_element(By.TAG_NAME, "li")''')
+            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
+            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+            logging.debug(f'''WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))''')
+            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
+                EC.text_to_be_present_in_element((By.XPATH, "//ul[@class='el-dropdown-menu el-popper']/li"), ":"))
+            time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
 
-        # get user id one by one
-        userid_elements = driver.find_element(By.CLASS_NAME, "el-dropdown-menu.el-popper").find_elements(By.TAG_NAME, "li")
-        userid_list = []
-        for element in userid_elements:
-            userid_list.append(re.findall("[0-9]+", element.text)[-1])
-        return userid_list
+            # get user id one by one
+            userid_elements = driver.find_element(By.CLASS_NAME, "el-dropdown-menu.el-popper").find_elements(By.TAG_NAME, "li")
+            userid_list = []
+            for element in userid_elements:
+                userid_list.append(re.findall("[0-9]+", element.text)[-1])
+            return userid_list
+        except Exception as e:
+            logging.error(
+                f"Webdriver quit abnormly, reason: {e}. get user_id list failed.")
+            driver.quit()
 
     def _get_electric_balance(self, driver):
         try:
@@ -500,8 +538,8 @@ class DataFetcher:
         except:
             return None,None,None
 
-    # 增加储存用电量的到mongodb的函数
-    def save_daily_usage_data(self, driver, user_id):
+    # 增加获取每日用电量的函数
+    def _get_daily_usage_data(self, driver):
         """储存指定天数的用电量"""
         retention_days = int(os.getenv("DATA_RETENTION_DAYS", 7))  # 默认值为7天
 
@@ -524,25 +562,80 @@ class DataFetcher:
         # 获取用电量的数据
         days_element = driver.find_elements(By.XPATH,
                                             "//*[@id='pane-second']/div[2]/div[2]/div[1]/div[3]/table/tbody/tr")  # 用电量值列表
-
-        # 连接数据库集合
-        self.connect_user_db(user_id)
-
+        date = []
+        usages = []
         # 将用电量保存为字典
         for i in days_element:
             day = i.find_element(By.XPATH, "td[1]/div").text
             usage = i.find_element(By.XPATH, "td[2]/div").text
             if usage != "":
-                dic = {'date': day, 'usage': float(usage)}
+                usages.append(usage)
+                date.append(day)
+            else:
+                logging.info(f"The electricity consumption of {usage} get nothing")
+        return date, usages
+
+    def _save_user_data(self, user_id, balance, last_daily_date, last_daily_usage, date, usages, month, month_usage, month_charge, yearly_charge, yearly_usage):
+        # 连接数据库集合
+        if self.connect_user_db(user_id):
+            # 写入当前户号
+            dic = {'name': 'user', 'value': f"{user_id}"}
+            self.insert_expand_data(dic)
+            # 写入剩余金额
+            dic = {'name': 'balance', 'value': f"{balance}"}
+            self.insert_expand_data(dic)
+            # 写入最近一次更新时间
+            dic = {'name': f"daily_date", 'value': f"{last_daily_date}"}
+            self.insert_expand_data(dic)
+            # 写入最近一次更新时间用电量
+            dic = {'name': f"daily_usage", 'value': f"{last_daily_usage}"}
+            self.insert_expand_data(dic)
+            
+            # 写入年用电量
+            dic = {'name': 'yearly_usage', 'value': f"{yearly_usage}"}
+            self.insert_expand_data(dic)
+            # 写入年用电电费
+            dic = {'name': 'yearly_charge', 'value': f"{yearly_charge} "}
+            self.insert_expand_data(dic)
+            
+            for index in range(len(date)):
+                dic = {'date': date[index], 'usage': float(usages[index])}
                 # 插入到数据库
                 try:
                     self.insert_data(dic)
-                    logging.info(f"The electricity consumption of {usage}KWh on {day} has been successfully deposited into the database")
+                    logging.info(f"The electricity consumption of {usages[index]}KWh on {date[index]} has been successfully deposited into the database")
                 except Exception as e:
-                    logging.debug(f"The electricity consumption of {day} failed to save to the database, which may already exist: {str(e)}")
+                    logging.debug(f"The electricity consumption of {date[index]} failed to save to the database, which may already exist: {str(e)}")
+
+            for index in range(len(month)):
+                try:
+                    dic = {'name': f"{month[index]}usage", 'value': f"{month_usage[index]}"}
+                    self.insert_expand_data(dic)
+                    dic = {'name': f"{month[index]}charge", 'value': f"{month_charge[index]}"}
+                    self.insert_expand_data(dic)
+                    logging.info(f"Get month power charge for {user_id} successfully, {month[index]} usage is {month_usage[index]} KWh, charge is {month_charge[index]} CNY.")
+                except Exception as e:
+                    logging.debug(f"The electricity consumption of {month[index]} failed to save to the database, which may already exist: {str(e)}")
+            if month_charge:
+                month_charge = month_charge[-1]
             else:
-                logging.info(f"The electricity consumption of {usage} get nothing")
-        self.connect.close()
+                month_charge = None
+                
+            if month_usage:
+                month_usage = month_usage[-1]
+            else:
+                month_usage = None
+            # 写入本月电量
+            dic = {'name': f"month_usage", 'value': f"{month_usage}"}
+            self.insert_expand_data(dic)
+            # 写入本月电费
+            dic = {'name': f"month_charge", 'value': f"{month_charge}"}
+            self.insert_expand_data(dic)
+            # dic = {'date': month[index], 'usage': float(month_usage[index]), 'charge': float(month_charge[index])}
+            self.connect.close()
+        else:
+            logging.info("The database creation failed and the data was not written correctly.")
+            return
 
 if __name__ == "__main__":
     with open("bg.jpg", "rb") as f:
