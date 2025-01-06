@@ -7,6 +7,7 @@
 
 # 修改记录
 
+- 2025-01-06 同步上游最新代码，解决1月特殊情况
 - 2025-01-02 同步上游最新代码
 - 2024-12-23 同步上游最新代码，修复问题
 - 2024-12-20 同步上游最新代码，配置文件中增加`IGNORE_USER_ID`，修复多用户数据获取问题，docker镜像增加打包日期版本
@@ -104,6 +105,3 @@ docker run -d --restart=unless-stopped \
 taygetus/sgcc_electricity_mqtt_discoverable
 ```
 > -v xxxx/.env   配置文件</br>-v xxxx/homeassistant.db    数据库
-
-# thanks for the coffee
-![赞赏](assets/alipay_wxpay.png)

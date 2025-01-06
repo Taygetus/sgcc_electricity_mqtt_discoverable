@@ -1,4 +1,3 @@
-from ast import Try
 import logging
 import os
 import re
@@ -7,12 +6,9 @@ import time
 
 import random
 import base64
-import json
-import requests
-import dotenv
 import sqlite3
 import undetected_chromedriver as uc
-
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
@@ -86,7 +82,9 @@ def get_transparency_location(image):
 class DataFetcher:
 
     def __init__(self, username: str, password: str):
-        dotenv.load_dotenv()
+        if 'PYTHON_IN_DOCKER' not in os.environ: 
+            import dotenv
+            dotenv.load_dotenv(verbose=True)
         self._username = username
         self._password = password
         self.onnx = ONNX("./captcha.onnx")
@@ -141,16 +139,6 @@ class DataFetcher:
         ActionChains(driver).move_by_offset(xoffset=distance, yoffset=yoffset_random).perform()
             # time.sleep(0.2)
         ActionChains(driver).release().perform()
-
-    def base64_api(self, b64, typeid=33):
-        data = {"username": self._tujian_uname, "password": self._tujian_passwd, "typeid": typeid, "image": b64}
-        result = json.loads(requests.post("http://api.ttshitu.com/predict", json=data).text)
-        if result['success']:
-            return result["data"]["result"]
-        else:
-            #！！！！！！！注意：返回 人工不足等 错误情况 请加逻辑处理防止脚本卡死 继续重新 识别
-            return result["message"]
-        return ""
 
     def connect_user_db(self, user_id):
         """创建数据库集合，db_name = electricity_daily_usage_{user_id}
@@ -269,7 +257,7 @@ class DataFetcher:
                 self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[1]/div[1]/div[2]/span')
                 #get canvas image
                 background_JS = 'return document.getElementById("slideVerify").childNodes[0].toDataURL("image/png");'
-                targe_JS = 'return document.getElementsByClassName("slide-verify-block")[0].toDataURL("image/png");'
+                # targe_JS = 'return document.getElementsByClassName("slide-verify-block")[0].toDataURL("image/png");'
                 # get base64 image data
                 im_info = driver.execute_script(background_JS) 
                 background = im_info.split(',')[1]  
@@ -317,11 +305,13 @@ class DataFetcher:
                     logging.info("login successed !")
                 else:
                     logging.info("login unsuccessed !")
+                    raise Exception("login unsuccessed")
             else:
                 if self._login(driver):
                     logging.info("login successed !")
                 else:
                     logging.info("login unsuccessed !")
+                    raise Exception("login unsuccessed")
         except Exception as e:
             logging.error(
                 f"Webdriver quit abnormly, reason: {e}. {self.RETRY_TIMES_LIMIT} retry times left.")
@@ -398,9 +388,23 @@ class DataFetcher:
         else:
             logging.info(
                 f"Get year power charge for {user_id} successfully, yealrly charge is {yearly_charge} CNY")
-  
+
+        # 按月获取数据
+        month, month_usage, month_charge = self._get_month_usage(driver)
+        if month is None:
+            logging.error(f"Get month power usage for {user_id} failed, pass")
+        else:
+            for m in range(len(month)):
+                logging.info(f"Get month power charge for {user_id} successfully, {month[m]} usage is {month_usage[m]} KWh, charge is {month_charge[m]} CNY.")
         # get yesterday usage
         last_daily_date, last_daily_usage = self._get_yesterday_usage(driver)
+        if last_daily_usage is None:
+            logging.error(f"Get daily power consumption for {user_id} failed, pass")
+        else:
+            logging.info(
+                f"Get daily power consumption for {user_id} successfully, , {last_daily_date} usage is {last_daily_usage} kwh.")
+        if month is None:
+            logging.error(f"Get month power usage for {user_id} failed, pass")
 
         # 新增储存用电量
         if self.enable_database_storage:
@@ -408,20 +412,10 @@ class DataFetcher:
             logging.info("enable_database_storage is true, we will store the data to the database.")
             # 按天获取数据 7天/30天
             date, usages = self._get_daily_usage_data(driver)
-            # 按月获取数据
-            month, month_usage, month_charge = self._get_month_usage(driver)
-            if month is None:
-                logging.error(f"Get month power usage for {user_id} failed, pass")
+            self._save_user_data(user_id, balance, last_daily_date, last_daily_usage, date, usages, month, month_usage, month_charge, yearly_charge, yearly_usage)
         else:
             logging.info("enable_database_storage is false, we will not store the data to the database.")
 
-        if last_daily_usage is None:
-            logging.error(f"Get daily power consumption for {user_id} failed, pass")
-        else:
-            logging.info(
-                f"Get daily power consumption for {user_id} successfully, , {last_daily_date} usage is {last_daily_usage} kwh.")
-                
-        self._save_user_data(user_id, balance, last_daily_date, last_daily_usage, date, usages, month, month_usage, month_charge, yearly_charge, yearly_usage)
         
         if month_charge:
             month_charge = month_charge[-1]
@@ -472,24 +466,32 @@ class DataFetcher:
     def _get_yearly_data(self, driver):
 
         try:
+            if datetime.now().month == 1:
+                self._click_button(driver, By.XPATH, '//*[@id="pane-first"]/div[1]/div/div[1]/div/div/input')
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                span_element = driver.find_element(By.XPATH, f"//span[contains(text(), '{datetime.now().year - 1}')]")
+                span_element.click()
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
             self._click_button(driver, By.XPATH, "//div[@class='el-tabs__nav is-top']/div[@id='tab-first']")
             time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
             # wait for data displayed
             target = driver.find_element(By.CLASS_NAME, "total")
             WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
-        except:
+        except Exception as e:
+            logging.error(f"The yearly data get failed : {e}")
             return None, None
 
         # get data
         try:
             yearly_usage = driver.find_element(By.XPATH, "//ul[@class='total']/li[1]/span").text
-
-        except:
+        except Exception as e:
+            logging.error(f"The yearly_usage data get failed : {e}")
             yearly_usage = None
 
         try:
             yearly_charge = driver.find_element(By.XPATH, "//ul[@class='total']/li[2]/span").text
-        except:
+        except Exception as e:
+            logging.error(f"The yearly_charge data get failed : {e}")
             yearly_charge = None
 
         return yearly_usage, yearly_charge
@@ -510,7 +512,8 @@ class DataFetcher:
                                                 "//div[@class='el-tab-pane dayd']//div[@class='el-table__body-wrapper is-scrolling-none']/table/tbody/tr[1]/td[1]/div")
             last_daily_date = date_element.text # 获取最近一次用电量的日期
             return last_daily_date, float(usage_element.text)
-        except:
+        except Exception as e:
+            logging.error(f"The yesterday data get failed : {e}")
             return None
 
     def _get_month_usage(self, driver):
@@ -519,6 +522,12 @@ class DataFetcher:
         try:
             self._click_button(driver, By.XPATH, "//div[@class='el-tabs__nav is-top']/div[@id='tab-first']")
             time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+            if datetime.now().month == 1:
+                self._click_button(driver, By.XPATH, '//*[@id="pane-first"]/div[1]/div/div[1]/div/div/input')
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                span_element = driver.find_element(By.XPATH, f"//span[contains(text(), '{datetime.now().year - 1}')]")
+                span_element.click()
+                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
             # wait for month displayed
             target = driver.find_element(By.CLASS_NAME, "total")
             WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
@@ -535,7 +544,8 @@ class DataFetcher:
                 usage.append(month_element[i][1])
                 charge.append(month_element[i][2])
             return month, usage, charge
-        except:
+        except Exception as e:
+            logging.error(f"The month data get failed : {e}")
             return None,None,None
 
     # 增加获取每日用电量的函数
@@ -613,7 +623,6 @@ class DataFetcher:
                     self.insert_expand_data(dic)
                     dic = {'name': f"{month[index]}charge", 'value': f"{month_charge[index]}"}
                     self.insert_expand_data(dic)
-                    logging.info(f"Get month power charge for {user_id} successfully, {month[index]} usage is {month_usage[index]} KWh, charge is {month_charge[index]} CNY.")
                 except Exception as e:
                     logging.debug(f"The electricity consumption of {month[index]} failed to save to the database, which may already exist: {str(e)}")
             if month_charge:
